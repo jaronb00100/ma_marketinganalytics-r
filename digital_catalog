@@ -1,0 +1,146 @@
+Sys.setenv("GAR_CLIENT_JSON" = "C:/Users/jrnbr/Documents/R_adventures/client_secret_522294055310-noqb9q4r5br7n1arcusp3mo2hck13ki2.apps.googleusercontent.com.json")
+
+
+
+library(googleAnalyticsR)
+library(googleAuthR)
+library(gargle)
+library(future.apply)
+library(ggplot2)
+library(dplyr)
+library("quantmod")
+library("reshape2") #for melt function
+library(googlesheets4)
+
+
+ga_auth(email="YourEmail@gmail.com")
+options(gargle_oauth_email = "YourEmail@gmail.com")
+gs4_auth(path = "C:/your-path-to-json.json")
+
+plan(multisession)
+
+## the ViewIds that you want to report on
+ga_ids <- c(100891890,	106993706,	102984998,	125465902,	99886214,	113839555, 182099274, 131912563, 103038625,	101112941,	131930915,	101113550,	103037618,	101139122,	113829152,	101004517,	179558120,	171545199,	140333619,	131974020,	109174048,	101113939,	131927025,	100961202,	131880888,	102995864,	101104068,	131920328,	100919998, 101143515, 106965194, 103037921, 101142612, 113830152, 213057869)	
+
+##the corresponding site names. be sure to have them in the same order of the ViewIds above.
+site_names <- c("UnFranchise US", "Isotonix US", "Motives US", "nutraMetrix US", "SHOP US", "TLS US", "Lumiere de Vie US", "Isotonix HK",	"Motives HK",	"SHOP HK",	"TLS HK",	"UnFranchise HK",	"Motives AUS",	"SHOP AUS",	"TLS AUS",	"UnFranchise AUS",	"Motives MYS",	"SHOP MYS",	"UnFranchise MYS",	"Isotonix SGP",	"Motives SGP",	"SHOP SGP",	"TLS SGP",	"UnFranchise SGP",	"Isotonix TWN",	"Motives TWN",	"SHOP TWN",	"TLS TWN",	"UnFranchise TWN", "SHOP Global", "Isotonix CA", "Motives CA", "SHOP CA", "TLS CA", "UnFranchise CA")
+
+
+#Set a start and enddate
+startDate <- "2020-10-27"
+endDate <- format(Sys.Date()-1,"%Y-%m-%d")
+
+
+#Set dimensions and metrics
+dimensions <- c("date","campaign","source")
+metrics <- c("users","sessions","transactions", "transactionRevenue")
+
+
+upload <- data.frame()
+
+for(i in seq_along(ga_ids)) {
+  data <- google_analytics(ga_ids[i], date_range = c(startDate,endDate), metrics = metrics,
+                           dimensions = dimensions, max = -1, anti_sample = TRUE)
+  
+  data$site_names <- site_names[i]
+  
+  
+  upload <- rbind(upload,data)
+  
+}
+
+#########################################################################
+##the above grabs the GA data and the below grabs the currency exchange rates
+#########################################################################
+
+currDF  <- data.frame(
+  date = seq.Date(from = as.Date("2020-10-27"), to = as.Date(format(Sys.Date()-1,"%Y-%m-%d")), length = 7),
+  currency = c('MYR', 'TWD', 'USD', 'HKD', 'SGD', 'AUD', 'CAD'),
+  amount = 1:7,stringsAsFactors=FALSE)
+
+
+#Set start and end dates
+startDt = as.Date("2020-10-27")
+endDt = as.Date(format(Sys.Date()-1,"%Y-%m-%d"))
+
+
+#create currency pair combinations i.e. EUR/GBP, USDGBP 
+currCombinations = paste(setdiff(unique(currDF$currency),"USD"),"USD",sep="/")
+
+
+#get FX data for each currency pair and merge them into a single xts dataset
+#see ?lapply, ?do.call and ?merge.xts
+#note auto.assign needs to be FALSE
+
+fxData = do.call(merge.xts,lapply(currCombinations,function(x) 
+  getFX(x,from=startDt,to=endDt,auto.assign=FALSE))) 
+
+
+#remove .GBP from all columns above
+colnames(fxData) = gsub("[.]USD","",colnames(fxData))
+
+#set conversion factor for GBP = 1
+fxData$USD = 1
+
+#create data.frame from xts data
+fxData_DF = data.frame(date=index(fxData),coredata(fxData),stringsAsFactors=FALSE)
+
+#To make fx dataset(wide format) amenable for merging with currDF
+#we convert it to long format by using melt from reshape2 package see,?melt
+
+fxMolten = melt(fxData_DF,id="date",variable.name="currency",value.name="conversionFactor")
+
+#############################################################################
+##the below seperates & joins tables by country and currency and then combines them back again
+#############################################################################
+
+#this subsets the GA upload data and the currency exchange data by sites that need a currency exchange
+#and then multiplies the revenue column by exchange rate
+mys_data <- subset(upload, grepl("Motives MYS|SHOP MYS", upload$site_names))
+myr_data <- subset(fxMolten, grepl("MYR", fxMolten$currency))
+mys_combined <- full_join(mys_data,myr_data, by = "date")
+mys_combined$Revenueconverted = mys_combined$conversionFactor*mys_combined$transactionRevenue
+
+#HK
+hk_data <- subset(upload, grepl("SHOP HK|Motives HK|UnFranchise HK", upload$site_names))
+hkd_data <- subset(fxMolten, grepl("HKD", fxMolten$currency))
+hk_combined <- full_join(hk_data,hkd_data, by = "date")
+hk_combined$Revenueconverted = hk_combined$conversionFactor*hk_combined$transactionRevenue
+
+#TWN
+twn_data <- subset(upload, grepl("SHOP TWN|Motives TWN|UnFranchise TWN", upload$site_names))
+twd_data <- subset(fxMolten, grepl("TWD", fxMolten$currency))
+twn_combined <- full_join(twn_data,twd_data, by = "date")
+twn_combined$Revenueconverted = twn_combined$conversionFactor*twn_combined$transactionRevenue
+
+#AUS
+aus_data <- subset(upload, grepl("AUS", upload$site_names))
+aud_data <- subset(fxMolten, grepl("AUD", fxMolten$currency))
+aus_combined <- full_join(aus_data,aud_data, by = "date")
+aus_combined$Revenueconverted = aus_combined$conversionFactor*aus_combined$transactionRevenue
+
+#SGP
+sgp_data <- subset(upload, grepl("SGP", upload$site_names))
+sgd_data <- subset(fxMolten, grepl("SGD", fxMolten$currency))
+sgp_combined <- full_join(sgp_data,sgd_data, by = "date")
+sgp_combined$Revenueconverted = sgp_combined$conversionFactor*sgp_combined$transactionRevenue
+
+#CAD
+can_data <- subset(upload, grepl("SHOP CA|Motives CA|Isotonix CA|TLS CA", upload$site_names))
+cad_data <- subset(fxMolten, grepl("CAD", fxMolten$currency))
+can_combined <- full_join(can_data,cad_data, by = "date")
+can_combined$Revenueconverted = can_combined$conversionFactor*can_combined$transactionRevenue
+
+#Remaining that use USD
+us_data <- subset(upload, grepl("SHOP Global|UnFranchise CA|UnFranchise US|Isotonix US|Motives US|nutraMetrix US|SHOP US|TLS US|Lumiere de Vie US|Isotonix HK|TLS HK|UnFranchise MYS|Isotonix TWN|TLS TWN", upload$site_names))
+usd_data <- subset(fxMolten, grepl("USD", fxMolten$currency))
+us_combined <- full_join(us_data,usd_data, by = "date")
+us_combined$Revenueconverted = us_combined$conversionFactor*us_combined$transactionRevenue
+
+#the remaining script combines all the individual data sets above back into one
+final_combined <- do.call("rbind", list(mys_combined,hk_combined,twn_combined,aus_combined,sgp_combined,us_combined,can_combined))
+
+
+#this writes it to Google Sheets
+sheet_write(final_combined, ss = 'link-to-googlesheets', sheet = 'Sheet1')
+
