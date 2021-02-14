@@ -1,4 +1,4 @@
-Sys.setenv("GAR_CLIENT_JSON" = "C:/Users/jrnbr/Documents/R_adventures/client_secret_522294055310-noqb9q4r5br7n1arcusp3mo2hck13ki2.apps.googleusercontent.com.json")
+Sys.setenv("GAR_CLIENT_JSON" = "C:/Users/path-to-your-client-secret.apps.googleusercontent.com.json")
 
 
 
